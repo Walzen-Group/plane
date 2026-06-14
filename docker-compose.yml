@@ -111,7 +111,7 @@ services:
     restart: always
     command: postgres -c 'max_connections=1000'
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data
     env_file:
       - .env
     environment:
@@ -125,7 +125,7 @@ services:
     image: valkey/valkey:7.2.11-alpine
     restart: always
     volumes:
-      - redisdata:/data
+      - ./data/redis:/data
 
   plane-mq:
     container_name: plane-mq
@@ -138,7 +138,7 @@ services:
       RABBITMQ_DEFAULT_PASS: ${RABBITMQ_PASSWORD}
       RABBITMQ_DEFAULT_VHOST: ${RABBITMQ_VHOST}
     volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
+      - ./data/rabbitmq:/var/lib/rabbitmq
 
   plane-minio:
     container_name: plane-minio
@@ -146,7 +146,7 @@ services:
     restart: always
     command: server /export --console-address ":9090"
     volumes:
-      - uploads:/export
+      - ./data/minio:/export
     environment:
       MINIO_ROOT_USER: ${AWS_ACCESS_KEY_ID}
       MINIO_ROOT_PASSWORD: ${AWS_SECRET_ACCESS_KEY}
@@ -169,9 +169,3 @@ services:
       - api
       - space
       - admin
-
-volumes:
-  pgdata:
-  redisdata:
-  uploads:
-  rabbitmq_data:

@@ -5,7 +5,7 @@ services:
     networks:
       - dev_env
     volumes:
-      - redisdata:/data
+      - ./data/redis:/data
     ports:
       - "6379:6379"
 
@@ -15,7 +15,7 @@ services:
     networks:
       - dev_env
     volumes:
-      - rabbitmq_data:/var/lib/rabbitmq
+      - ./data/rabbitmq:/var/lib/rabbitmq
     env_file:
       - .env
     environment:
@@ -38,7 +38,7 @@ services:
       && tail -f /dev/null
       "
     volumes:
-      - uploads:/export
+      - ./data/minio:/export
     env_file:
       - .env
     environment:
@@ -55,7 +55,7 @@ services:
       - dev_env
     command: postgres -c 'max_connections=1000'
     volumes:
-      - pgdata:/var/lib/postgresql/data
+      - ./data/postgres:/var/lib/postgresql/data
     env_file:
       - .env
     environment:
@@ -72,6 +72,13 @@ services:
     restart: unless-stopped
     networks:
       - dev_env
+    extra_hosts:
+      # Lets the container reach services running on the host (e.g. an
+      # Authentik IdP for OIDC discovery/JWKS). Redundant on Docker Desktop
+      # (which provides this automatically) but required on native Linux
+      # Docker. Use `http://host.docker.internal:<port>/...` for any URL the
+      # API must reach back through the host loopback.
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./apps/api:/code
     command: ./bin/docker-entrypoint-api-local.sh
@@ -139,12 +146,6 @@ services:
     depends_on:
       - plane-db
       - plane-redis
-
-volumes:
-  redisdata:
-  uploads:
-  pgdata:
-  rabbitmq_data:
 
 networks:
   dev_env:
