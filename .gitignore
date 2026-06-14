@@ -117,3 +117,6 @@ packages/i18n/src/types/keys.generated.ts
 
 # Local security notes (not for version control)
 /security/
+
+# Bind-mounted runtime state from docker-compose (postgres, redis, minio, rabbitmq)
+/data/
