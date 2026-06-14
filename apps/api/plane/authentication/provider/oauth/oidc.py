@@ -216,15 +216,19 @@ class OIDCOAuthProvider(OauthAdapter):
     def set_user_data(self):
         user_info_response = self.get_user_response()
         email = user_info_response.get("email")
+        # Coerce missing claims to "" rather than letting None reach the base
+        # adapter: User.{avatar,first_name,last_name} are NOT NULL in the DB,
+        # and sync_user_data writes user.avatar = whatever we put here when the
+        # avatar download path returns nothing.
         super().set_user_data(
             {
                 "email": email,
                 "user": {
                     "provider_id": user_info_response.get("sub"),
                     "email": email,
-                    "avatar": user_info_response.get("picture"),
-                    "first_name": user_info_response.get("given_name"),
-                    "last_name": user_info_response.get("family_name"),
+                    "avatar": user_info_response.get("picture") or "",
+                    "first_name": user_info_response.get("given_name") or "",
+                    "last_name": user_info_response.get("family_name") or "",
                     "is_password_autoset": True,
                 },
             }
