@@ -110,3 +110,6 @@ build/
 .react-router/
 temp/
 scripts/
+
+# Bind-mounted runtime state from docker-compose (postgres, redis, minio, rabbitmq)
+/data/
