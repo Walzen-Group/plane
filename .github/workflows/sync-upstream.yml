@@ -1,0 +1,51 @@
+name: Sync upstream master + rebase OIDC patch
+
+# Rebases this branch (containing the OIDC patch as one commit on top of
+# makeplane's master) onto the latest upstream/master, then force-pushes.
+# Runs daily; can also be triggered manually from the Actions tab.
+#
+# If the rebase fails (real upstream-vs-patch conflict), the workflow fails —
+# resolve locally with:
+#   git fetch upstream master && git rebase upstream/master
+#   # fix conflicts, git rebase --continue
+#   git push --force-with-lease origin oidc-on-master
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # daily at 06:00 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+env:
+  PATCH_BRANCH: oidc-on-master
+  UPSTREAM_REPO: https://github.com/makeplane/plane.git
+  UPSTREAM_BRANCH: master
+
+jobs:
+  rebase:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout patch branch
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ env.PATCH_BRANCH }}
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Configure git identity
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Add upstream + fetch
+        run: |
+          git remote add upstream "$UPSTREAM_REPO"
+          git fetch upstream "$UPSTREAM_BRANCH"
+
+      - name: Rebase onto upstream/${{ env.UPSTREAM_BRANCH }}
+        run: git rebase "upstream/${UPSTREAM_BRANCH}"
+
+      - name: Push (force-with-lease)
+        run: git push --force-with-lease origin "$PATCH_BRANCH"
