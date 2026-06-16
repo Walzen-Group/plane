@@ -142,6 +142,120 @@ git reset --hard origin/oidc-on-master   # back to whatever's on the fork
 
 Nothing on the remote changes; you're just back to a clean working tree.
 
+### 3.3 Auto-resolution with a Claude routine (optional, opt-in)
+
+A Claude routine running on your Claude subscription (not the paid API) is
+triggered **directly by the failing `sync-upstream` workflow** via API
+webhook — fires within seconds, no polling, no daily quota burn on quiet
+days. The routine attempts the rebase resolution following this playbook,
+opens a PR against `oidc-on-master` (never force-pushes directly), or
+opens an issue if it can't resolve cleanly.
+
+**Wiring overview:**
+
+```
+sync-upstream.yml fails  ──curl POST──▶  Claude routine webhook
+                                              │
+                                              ▼
+                                  Claude clones, rebases, resolves
+                                  conflicts, opens PR / issue
+```
+
+To enable:
+
+1. **Install the Claude GitHub App** on `walzen-group/plane`
+   (github.com/apps/claude). This authenticates the routine's `git clone` and
+   `git push` (to `claude/`-prefixed branches) through Claude's GitHub proxy —
+   **no PAT needed** — and is also what the optional "Auto-fix pull requests"
+   toggle relies on.
+
+2. **Create the routine in Claude**, using the **API trigger** option
+   (Routines → New → trigger: API). Paste the prompt block below, make sure it's
+   connected to GitHub (the App from step 1), and optionally flip on **Auto-fix
+   pull requests**. **No environment variable / PAT is required** — the prompt
+   clones, pushes a `claude/…` branch, and opens the PR through the built-in
+   GitHub integration, not the `gh` CLI. When saved, the UI gives you a
+   **webhook URL** with an embedded auth token.
+   - _Only_ if you change the prompt to call the `gh` CLI directly would you need
+     to `apt install gh` in a setup script and add `GH_TOKEN=github_pat_…` as an
+     env var on the routine's cloud environment (a fine-grained, minimally-scoped
+     PAT). Routine env vars are **not encrypted at rest** — scope it and rotate it.
+
+3. **Store that webhook URL as a GitHub secret**:
+   - Repo → **Settings → Secrets and variables → Actions → New repository
+     secret**
+   - Name: `CLAUDE_ROUTINE_WEBHOOK`
+   - Value: the full webhook URL from step 2
+
+That's it. The final step in `sync-upstream.yml` already POSTs to
+`${CLAUDE_ROUTINE_WEBHOOK}` on failure, gated by `env.CLAUDE_ROUTINE_WEBHOOK
+!= ''` — so until you set the secret it's a no-op, and once you do it just
+works.
+
+**Routine prompt (paste into the routine's prompt field):**
+
+```
+The "Sync upstream master + rebase OIDC patch" workflow on $repo failed.
+Webhook payload (in $1 or your runtime's payload variable):
+  {event, repo, branch, upstream_branch, run_url}
+
+Your job: attempt the rebase resolution and open a PR. Use your built-in GitHub
+integration for clone / push / PR creation — the `gh` CLI is NOT installed, so
+do not call it. Push only to a claude/ branch; never to ${branch} directly.
+
+1. Clone the repo (the GitHub proxy authenticates this):
+     git clone https://github.com/${repo}.git
+     cd plane && git checkout ${branch}
+2. Add upstream and fetch:
+     git remote add upstream https://github.com/makeplane/plane.git
+     git fetch upstream ${upstream_branch}
+3. Replay the rebase:
+     git rebase upstream/${upstream_branch}    # expect conflicts
+4. Resolve following MAINTENANCE.md §3 in that repo. Almost all conflicts
+   are "keep both sides" because the OIDC patch is purely additive. Real
+   restructures (renames, deletions) need code thinking — see §3.1 there.
+5. Verify before committing:
+     python3 -m py_compile $(git diff --name-only HEAD -- '*.py')
+     pnpm install                       # only if pnpm-lock changed
+     pnpm --filter @plane/types --filter web --filter admin check:types
+   All three must exit 0.
+6. Continue the rebase, then push to a claude/ branch (allowed by default; the
+   proxy authenticates the push — no token needed):
+     git add -A && git rebase --continue
+     git checkout -b claude/auto-rebase-$(date +%Y%m%d-%H%M%S)
+     git push origin HEAD
+7. Open a pull request from that branch against ${branch} using your built-in
+   GitHub tools (NOT the gh CLI), titled
+     "auto: rebase OIDC patch onto upstream/master"
+   with a body summarizing which files conflicted and how each was resolved,
+   plus a link to ${run_url}.
+
+If a conflict is genuinely unresolvable (upstream removed/renamed something
+the patch depends on), DO NOT guess — abort and open a GitHub issue instead
+(via your built-in GitHub tools), titled
+   "sync-upstream rebase blocked — needs manual resolution"
+with a body stating exactly what blocks the rebase, which file(s), what to look
+at, and a link to ${run_url}:
+     git rebase --abort
+
+Never force-push to ${branch} directly. Only the claude/ branch + PR path.
+```
+
+**Costs**: one Claude run per failed sync. Real conflicts in this fork
+are small (patch is mostly additive), so each run consumes a small slice
+of your subscription quota. On days with no upstream churn or a clean
+rebase, the routine simply isn't invoked.
+
+**Trust model**: AI-resolved rebases land in a PR titled
+`auto: rebase OIDC patch onto upstream/master`. The build workflow doesn't
+trigger until you merge the PR, so a bad resolution can't reach prod.
+Skim the diff and merge if it looks right; close the PR and resolve
+manually if not.
+
+To disable: delete (or rotate) the `CLAUDE_ROUTINE_WEBHOOK` secret — the
+sync workflow skips the curl step. The routine can stay parked or be
+deleted in Claude's UI.
+
 ---
 
 ## 4. When `build-images.yml` fails
