@@ -12,6 +12,7 @@ from urllib.parse import urlencode, urlparse
 import jwt
 import pytz
 import requests
+from django.core.cache import cache
 
 # Module imports
 from plane.authentication.adapter.oauth import OauthAdapter
@@ -24,6 +25,28 @@ from plane.authentication.adapter.error import (
 # Module-level logger: the discovery document is fetched inside __init__ before
 # super().__init__() has run, so self.logger does not exist yet at that point.
 logger = logging.getLogger("plane.authentication")
+
+# The discovery document and JWKS almost never change, but the naive flow
+# refetched both on every sign-in (discovery twice: once to build the authorize
+# URL, once again on the callback), adding several blocking round-trips to the
+# IdP per login. Cache discovery in Redis and reuse a process-wide PyJWKClient
+# so a warm login performs only the mandatory token exchange.
+DISCOVERY_CACHE_TTL = 60 * 60  # seconds
+
+# Process-local PyJWKClient cache, keyed by JWKS URI. PyJWKClient caches the
+# fetched key set for `lifespan` seconds, so reusing one instance per URI avoids
+# refetching the JWKS on every callback.
+_jwks_clients = {}
+
+
+def _get_jwks_client(jwks_uri):
+    client = _jwks_clients.get(jwks_uri)
+    if client is None:
+        client = jwt.PyJWKClient(
+            jwks_uri, cache_keys=True, lifespan=DISCOVERY_CACHE_TTL, timeout=10
+        )
+        _jwks_clients[jwks_uri] = client
+    return client
 
 
 class OIDCOAuthProvider(OauthAdapter):
@@ -85,6 +108,10 @@ class OIDCOAuthProvider(OauthAdapter):
         # verified against the id_token claim on callback.
         self.nonce = uuid.uuid4().hex
 
+        # Populated on the callback leg from the validated id_token so user data
+        # can be derived without a separate /userinfo request.
+        self.id_token_claims = None
+
         redirect_uri = f"{'https' if request.is_secure() else 'http'}://{request.get_host()}/auth/oidc/callback/"
         url_params = {
             "client_id": client_id,
@@ -111,7 +138,11 @@ class OIDCOAuthProvider(OauthAdapter):
         )
 
     def __get_discovery_document(self, oidc_url):
-        """Fetch and return the OIDC discovery document."""
+        """Fetch (and cache) the OIDC discovery document."""
+        cache_key = f"oidc:discovery:{oidc_url}"
+        cached = cache.get(cache_key)
+        if cached:
+            return cached
         try:
             response = requests.get(
                 f"{oidc_url}/.well-known/openid-configuration",
@@ -119,13 +150,15 @@ class OIDCOAuthProvider(OauthAdapter):
                 timeout=10,
             )
             response.raise_for_status()
-            return response.json()
+            document = response.json()
         except requests.RequestException:
             logger.warning("Error fetching OIDC discovery document")
             raise AuthenticationException(
                 error_code=AUTHENTICATION_ERROR_CODES["OIDC_OAUTH_PROVIDER_ERROR"],
                 error_message="OIDC_OAUTH_PROVIDER_ERROR",
             )
+        cache.set(cache_key, document, timeout=DISCOVERY_CACHE_TTL)
+        return document
 
     def get_nonce(self):
         return self.nonce
@@ -147,7 +180,7 @@ class OIDCOAuthProvider(OauthAdapter):
         session_nonce = self.request.session.get("nonce")
 
         try:
-            jwks_client = jwt.PyJWKClient(self.jwks_uri)
+            jwks_client = _get_jwks_client(self.jwks_uri)
             signing_key = jwks_client.get_signing_key_from_jwt(id_token)
             decoded = jwt.decode(
                 id_token,
@@ -193,7 +226,9 @@ class OIDCOAuthProvider(OauthAdapter):
 
         id_token = token_response.get("id_token", "")
         # Full JWKS validation of the id_token (signature, aud, iss, exp, nonce).
-        self.__validate_id_token(id_token)
+        # Retain the decoded claims so set_user_data can derive the profile from
+        # them instead of making a second /userinfo round-trip.
+        self.id_token_claims = self.__validate_id_token(id_token)
 
         super().set_token_data(
             {
@@ -214,7 +249,13 @@ class OIDCOAuthProvider(OauthAdapter):
         )
 
     def set_user_data(self):
-        user_info_response = self.get_user_response()
+        # Prefer the claims carried in the validated id_token. With the standard
+        # "openid email profile" scopes these already include email/sub/name, so
+        # the extra /userinfo request is redundant. Fall back to /userinfo only
+        # when the id_token omits the email claim (some IdPs issue lean tokens).
+        user_info_response = self.id_token_claims or {}
+        if not user_info_response.get("email"):
+            user_info_response = {**user_info_response, **self.get_user_response()}
         email = user_info_response.get("email")
         # Coerce missing claims to "" rather than letting None reach the base
         # adapter: User.{avatar,first_name,last_name} are NOT NULL in the DB,
