@@ -51,19 +51,22 @@ jobs:
         run: git push --force-with-lease origin "$PATCH_BRANCH"
 
       - name: Notify Claude routine on failure (optional)
-        # Fires the Claude routine's webhook so it can attempt the rebase
-        # resolution automatically. Skipped when CLAUDE_ROUTINE_WEBHOOK is not
-        # set in repo secrets — this whole step becomes a no-op.
-        # See MAINTENANCE.md §3.3.
-        if: failure() && env.CLAUDE_ROUTINE_WEBHOOK != ''
+        if: failure()
+        continue-on-error: true
         env:
-          CLAUDE_ROUTINE_WEBHOOK: ${{ secrets.CLAUDE_ROUTINE_WEBHOOK }}
+          CLAUDE_ROUTINE_URL: ${{ secrets.CLAUDE_ROUTINE_URL }}
+          CLAUDE_ROUTINE_TOKEN: ${{ secrets.CLAUDE_ROUTINE_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
-          curl -sS -X POST "$CLAUDE_ROUTINE_WEBHOOK" \
+          if [ -z "$CLAUDE_ROUTINE_URL" ] || [ -z "$CLAUDE_ROUTINE_TOKEN" ]; then
+            echo "Webhook not configured, skipping."
+            exit 0
+          fi
+          TEXT="Rebase of ${PATCH_BRANCH} onto ${UPSTREAM_BRANCH} failed in ${REPO}. Run: ${RUN_URL}. Please resolve the conflicts and force-push with --force-with-lease."
+          curl -sS -X POST "$CLAUDE_ROUTINE_URL" \
+            -H "Authorization: Bearer $CLAUDE_ROUTINE_TOKEN" \
+            -H "anthropic-version: 2023-06-01" \
+            -H "anthropic-beta: experimental-cc-routine-2026-04-01" \
             -H 'Content-Type: application/json' \
-            -d "$(jq -nc \
-              --arg repo  "${{ github.repository }}" \
-              --arg branch "$PATCH_BRANCH" \
-              --arg upstream "${UPSTREAM_BRANCH}" \
-              --arg run_url "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-              '{event:"sync_upstream_failed", repo:$repo, branch:$branch, upstream_branch:$upstream, run_url:$run_url}')"
+            -d "$(jq -nc --arg text "$TEXT" '{text:$text}')"
