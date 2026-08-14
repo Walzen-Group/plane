@@ -8,6 +8,10 @@ from plane.authentication.adapter.base import Adapter
 class CredentialAdapter(Adapter):
     """Common interface for all credential providers"""
 
+    # Email-based (email/password, magic link) providers. Used by the signup
+    # gate to distinguish email registration from identity-provider (OIDC) sign-up.
+    is_credential_provider = True
+
     def __init__(self, request, provider, callback=None):
         super().__init__(request=request, provider=provider, callback=callback)
         self.request = request

@@ -35,6 +35,10 @@ from .error import AUTHENTICATION_ERROR_CODES, AuthenticationException
 class Adapter:
     """Common interface for all auth providers"""
 
+    # Overridden to True by credential (email/password, magic link) adapters.
+    # OAuth/OIDC adapters keep the default of False.
+    is_credential_provider = False
+
     def __init__(self, request, provider, callback=None):
         self.request = request
         self.provider = provider
@@ -102,15 +106,33 @@ class Adapter:
     def __check_signup(self, email):
         """Check if sign up is enabled or not and raise exception if not enabled"""
 
-        # Get configuration value
-        (ENABLE_SIGNUP,) = get_configuration_value([
-            {"key": "ENABLE_SIGNUP", "default": os.environ.get("ENABLE_SIGNUP", "1")}
+        # A pending workspace invite always allows the account to be created,
+        # regardless of provider or the signup flags below.
+        if WorkspaceMemberInvite.objects.filter(email=email).exists():
+            return True
+
+        # Get configuration values
+        (ENABLE_SIGNUP, ENABLE_EMAIL_SIGNUP) = get_configuration_value([
+            {"key": "ENABLE_SIGNUP", "default": os.environ.get("ENABLE_SIGNUP", "1")},
+            {"key": "ENABLE_EMAIL_SIGNUP", "default": os.environ.get("ENABLE_EMAIL_SIGNUP", "1")},
         ])
 
-        # Check if sign up is disabled and invite is present or not
-        if ENABLE_SIGNUP == "0" and not WorkspaceMemberInvite.objects.filter(email=email).exists():
+        # Global signup gate — applies to every provider.
+        if ENABLE_SIGNUP == "0":
             self.logger.warning("Sign up is disabled and invite is not present")
-            # Raise exception
+            raise AuthenticationException(
+                error_code=AUTHENTICATION_ERROR_CODES["SIGNUP_DISABLED"],
+                error_message="SIGNUP_DISABLED",
+                payload={"email": email},
+            )
+
+        # Email signup gate — new accounts created through the email credential
+        # providers (email/password and magic link) are blocked when
+        # ENABLE_EMAIL_SIGNUP is off, so brand-new users can only register
+        # through an identity provider (e.g. OIDC). This only runs for new
+        # accounts, so email sign-in for existing users keeps working.
+        if self.is_credential_provider and ENABLE_EMAIL_SIGNUP == "0":
+            self.logger.warning("Email based sign up is disabled")
             raise AuthenticationException(
                 error_code=AUTHENTICATION_ERROR_CODES["SIGNUP_DISABLED"],
                 error_message="SIGNUP_DISABLED",

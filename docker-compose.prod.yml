@@ -84,6 +84,10 @@ x-app-env: &app-env
   SECRET_KEY: ${SECRET_KEY:?SECRET_KEY is required, generate a long random string}
   AMQP_URL: ${AMQP_URL:-amqp://${RABBITMQ_USER:-plane}:${RABBITMQ_PASSWORD}@plane-mq:5672/${RABBITMQ_VHOST:-plane}}
   API_KEY_RATE_LIMIT: ${API_KEY_RATE_LIMIT:-60/minute}
+  # Seeded into instance config on first boot (DB row wins afterwards).
+  # Set to 0 to block new email/password + magic-link registrations so new
+  # users can only sign up via OIDC. Existing email users can still sign in.
+  ENABLE_EMAIL_SIGNUP: ${ENABLE_EMAIL_SIGNUP:-1}
   MINIO_ENDPOINT_SSL: ${MINIO_ENDPOINT_SSL:-0}
   LIVE_SERVER_SECRET_KEY: ${LIVE_SERVER_SECRET_KEY}
   WEBHOOK_ALLOWED_IPS: ${WEBHOOK_ALLOWED_IPS:-}

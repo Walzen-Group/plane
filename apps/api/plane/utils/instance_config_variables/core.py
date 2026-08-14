@@ -13,6 +13,16 @@ authentication_config_variables = [
         "is_encrypted": False,
     },
     {
+        # When "0", new accounts can no longer be created through the email
+        # credential providers (email/password and magic link); brand-new users
+        # must register through an identity provider such as OIDC. Existing
+        # email users can still sign in. Defaults to "1" (upstream behaviour).
+        "key": "ENABLE_EMAIL_SIGNUP",
+        "value": os.environ.get("ENABLE_EMAIL_SIGNUP", "1"),
+        "category": "AUTHENTICATION",
+        "is_encrypted": False,
+    },
+    {
         "key": "ENABLE_EMAIL_PASSWORD",
         "value": os.environ.get("ENABLE_EMAIL_PASSWORD", "1"),
         "category": "AUTHENTICATION",
